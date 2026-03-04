@@ -1,7 +1,7 @@
 <?php
 session_start();
 if (!isset($_SESSION['user_login'])) {
-    header("Location: index.php");
+    header("Location: login.php");
     exit();
 }
 
@@ -10,7 +10,6 @@ $base_dir = "repo/$user_key";
 $trash_dir = "$base_dir/.trash";
 $error_msg = "";
 
-// 1. Ensure Directories Exist
 if (!file_exists($base_dir)) {
     mkdir($base_dir, 0777, true);
 }
@@ -18,7 +17,6 @@ if (!file_exists($trash_dir)) {
     mkdir($trash_dir, 0777, true);
 }
 
-// 2. Encryption/Decryption Helpers
 function encrypt_content($data, $key) {
     $cipher = "aes-256-cbc";
     $iv_len = openssl_cipher_iv_length($cipher);
@@ -36,22 +34,16 @@ function decrypt_content($data, $key) {
     return openssl_decrypt($encrypted, $cipher, substr(hash('sha256', $key), 0, 32), 0, $iv);
 }
 
-// 3. Handle File Actions (Delete, Restore, Permanent Delete)
 if (isset($_GET['action']) && isset($_GET['file'])) {
-    $file = basename($_GET['file']); // Security
-    
+    $file = basename($_GET['file']);
     if ($_GET['action'] === 'delete') {
-        // Soft Delete: Move to trash
         rename("$base_dir/$file", "$trash_dir/$file");
     } elseif ($_GET['action'] === 'restore') {
-        // Restore: Move back to main
         rename("$trash_dir/$file", "$base_dir/$file");
     } elseif ($_GET['action'] === 'perm_delete') {
-        // Permanent: Unlink
         unlink("$trash_dir/$file");
     }
     
-    // Redirect to clear query params
     $redirect_tab = ($_GET['action'] === 'delete') ? '' : '?view=trash';
     if ($_GET['action'] === 'restore') $redirect_tab = '';
     
@@ -59,7 +51,6 @@ if (isset($_GET['action']) && isset($_GET['file'])) {
     exit();
 }
 
-// 4. Download Handler
 if (isset($_GET['download'])) {
     $file = basename($_GET['download']);
     $filepath = $base_dir . "/" . $file;
@@ -77,7 +68,6 @@ if (isset($_GET['download'])) {
     }
 }
 
-// 5. Upload Handler
 if (isset($_FILES['file_upload'])) {
     $files = $_FILES['file_upload'];
     $count = is_array($files['name']) ? count($files['name']) : 1;
@@ -116,7 +106,6 @@ if (isset($_FILES['file_upload'])) {
     exit();
 }
 
-// Determine View Mode
 $view_trash = (isset($_GET['view']) && $_GET['view'] === 'trash');
 $current_dir = $view_trash ? $trash_dir : $base_dir;
 ?>
