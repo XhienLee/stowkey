@@ -1,4 +1,4 @@
-# NOS Vault
+# Stowkey
 
 A small, self-hosted encrypted file locker written in plain PHP. There are no usernames or passwords: registering creates a random access key, and that key is the only way into the vault.
 
@@ -24,7 +24,7 @@ These examples use `/var/www/vault` for the code and `/var/lib/vault` for data. 
 
 ```bash
 sudo mkdir -p /var/www/vault /var/lib/vault
-sudo cp *.php /var/www/vault/
+sudo cp *.php app.css app.js /var/www/vault/
 sudo chown www-data /var/lib/vault
 sudo chmod 700 /var/lib/vault
 ```
@@ -41,7 +41,7 @@ sudo chmod 700 /var/lib/vault
     <Directory /var/www/vault>
         AllowOverride None
         Require all granted
-        DirectoryIndex login.php
+        DirectoryIndex index.php
     </Directory>
 </VirtualHost>
 ```
@@ -52,7 +52,7 @@ sudo chmod 700 /var/lib/vault
 server {
     listen 80;
     root /var/www/vault;
-    index login.php;
+    index index.php;
     client_max_body_size 110M;
 
     location / {
@@ -82,7 +82,13 @@ These limits are constants at the top of `lib.php`:
 |---|---|---|
 | `VAULT_QUOTA_BYTES` | 1 GiB | Storage per user, including trash |
 | `VAULT_MIN_FREE_BYTES` | 1 GiB | Uploads stop when free disk falls below this |
+| `VAULT_REG_PER_IP_HOUR` | 5 | New keys per IP address (or IPv6 /64) each hour |
+| `VAULT_REG_GLOBAL_HOUR` | 100 | New keys across the whole site each hour |
 | `VAULT_CHUNK_BYTES` | 1 MiB | Encryption chunk size. Do not change once files exist |
+
+The two registration limits can also be set with environment variables of the same name.
+
+Behind a reverse proxy or CDN, configure your web server to restore the real client address (`mod_remoteip` or nginx `real_ip`). Otherwise every visitor shares the proxy address and one limit.
 
 ## Upgrading from the `keys.json` version
 
@@ -97,11 +103,13 @@ Back up `vault.db` and the `files/` folder together, from the data folder. Stop 
 - The database stores only a one-way hash of each access key.
 - Keys are derived from the access key with HKDF. Files use XChaCha20-Poly1305 through libsodium's secretstream, and filenames use `crypto_secretbox`.
 - Stolen files and databases cannot be decrypted without the access keys.
+- Registration limits use a salted hash of the client address, kept for one hour. Raw addresses are not stored.
+- The Content-Security-Policy allows scripts only from this site, with no inline scripts.
 - Forms use CSRF tokens, and session cookies are `HttpOnly` and `SameSite=Lax`, plus `Secure` over HTTPS.
 
 Known limits:
 
-- While a user is logged in, their derived key is in the PHP session file. Someone who controls the running server can read files of active users or capture keys at login.
+- While a user is logged in, their derived key is in the PHP session file. A newly created access key also stays there until the user confirms they saved it, or the session ends. Someone who controls the running server can read files of active users or capture keys at login.
 - File sizes, upload times and the number of files per user are not encrypted.
-- Registration is open with no rate limit. Add one at your web server or proxy for public deployments.
+- Registration limits slow abuse but cannot stop an attacker with many IP addresses. The site-wide limit caps growth, but such an attacker could use it up and block new keys for an hour.
 - The HKDF labels in `lib.php` must not change once data exists, or existing files become unreadable.
