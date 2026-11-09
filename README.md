@@ -93,12 +93,6 @@ The browser checks file sizes before uploading, but that is only for convenience
 
 For a public demo, lower the storage limits, for example `VAULT_QUOTA_BYTES=104857600` (100 MiB) and `VAULT_REG_GLOBAL_HOUR=20`.
 
-Behind a reverse proxy or CDN, configure your web server to restore the real client address (`mod_remoteip` or nginx `real_ip`). Otherwise every visitor shares the proxy address and one limit.
-
-## Upgrading from the `keys.json` version
-
-Accounts and files from the old version are not migrated. After deploying, delete the old `keys.json` and `repo/` from the web root, because they remain publicly reachable until you do.
-
 ## Backups
 
 Back up `vault.db` and the `files/` folder together, from the data folder. Stop the web server first, or copy the database with SQLite's `.backup` command.
