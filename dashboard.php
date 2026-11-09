@@ -1,113 +1,155 @@
 <?php
-session_start();
-if (!isset($_SESSION['user_login'])) {
-    header("Location: login.php");
+require __DIR__ . '/lib.php';
+start_session();
+
+if (empty($_SESSION['uid']) || empty($_SESSION['master'])) {
+    header('Location: login.php');
     exit();
 }
 
-$user_key = $_SESSION['key'];
-$base_dir = "repo/$user_key";
-$trash_dir = "$base_dir/.trash";
-$error_msg = "";
+$user_id = (int) $_SESSION['uid'];
+$master = base64_decode($_SESSION['master']);
+$dir = user_dir($user_id);
 
-if (!file_exists($base_dir)) {
-    mkdir($base_dir, 0777, true);
-}
-if (!file_exists($trash_dir)) {
-    mkdir($trash_dir, 0777, true);
-}
-
-function encrypt_content($data, $key) {
-    $cipher = "aes-256-cbc";
-    $iv_len = openssl_cipher_iv_length($cipher);
-    $iv = openssl_random_pseudo_bytes($iv_len);
-    $encrypted = openssl_encrypt($data, $cipher, substr(hash('sha256', $key), 0, 32), 0, $iv);
-    return "::SECURE::" . $iv . $encrypted;
+function find_file(int $user_id, mixed $id, int $in_trash): ?array {
+    if (!is_scalar($id) || !ctype_digit((string) $id)) return null;
+    $stmt = db()->prepare('SELECT * FROM files WHERE id = ? AND user_id = ? AND in_trash = ?');
+    $stmt->execute([(int) $id, $user_id, $in_trash]);
+    return $stmt->fetch() ?: null;
 }
 
-function decrypt_content($data, $key) {
-    $cipher = "aes-256-cbc";
-    $iv_len = openssl_cipher_iv_length($cipher);
-    $data = substr($data, 10); 
-    $iv = substr($data, 0, $iv_len);
-    $encrypted = substr($data, $iv_len);
-    return openssl_decrypt($encrypted, $cipher, substr(hash('sha256', $key), 0, 32), 0, $iv);
-}
-
-if (isset($_GET['action']) && isset($_GET['file'])) {
-    $file = basename($_GET['file']);
-    if ($_GET['action'] === 'delete') {
-        rename("$base_dir/$file", "$trash_dir/$file");
-    } elseif ($_GET['action'] === 'restore') {
-        rename("$trash_dir/$file", "$base_dir/$file");
-    } elseif ($_GET['action'] === 'perm_delete') {
-        unlink("$trash_dir/$file");
-    }
-    
-    $redirect_tab = ($_GET['action'] === 'delete') ? '' : '?view=trash';
-    if ($_GET['action'] === 'restore') $redirect_tab = '';
-    
-    header("Location: dashboard.php$redirect_tab");
+function upload_response(array $errors): never {
+    http_response_code($errors ? 400 : 200);
+    header('Content-Type: text/plain; charset=utf-8');
+    echo $errors ? implode("\n", $errors) : 'ok';
     exit();
 }
 
 if (isset($_GET['download'])) {
-    $file = basename($_GET['download']);
-    $filepath = $base_dir . "/" . $file;
-    if (file_exists($filepath)) {
-        $content = file_get_contents($filepath);
-        if (substr($content, 0, 10) === "::SECURE::") {
-            $content = decrypt_content($content, $user_key);
-        }
-        header('Content-Description: File Transfer');
-        header('Content-Type: application/octet-stream');
-        header('Content-Disposition: attachment; filename="'.$file.'"');
-        header('Content-Length: ' . strlen($content));
-        echo $content;
-        exit;
+    $row = find_file($user_id, $_GET['download'], 0);
+    if (!$row) {
+        http_response_code(404);
+        exit('File not found.');
     }
-}
+    try {
 
-if (isset($_FILES['file_upload'])) {
-    $files = $_FILES['file_upload'];
-    $count = is_array($files['name']) ? count($files['name']) : 1;
-
-    for ($i = 0; $i < $count; $i++) {
-        $name = is_array($files['name']) ? $files['name'][$i] : $files['name'];
-        $tmp_name = is_array($files['tmp_name']) ? $files['tmp_name'][$i] : $files['tmp_name'];
-        
-        if (empty($name)) continue;
-
-        $extension = pathinfo($name, PATHINFO_EXTENSION);
-        $name_part = pathinfo($name, PATHINFO_FILENAME);
-        $new_name = $name;
-        $counter = 1;
-        while(file_exists($base_dir . "/" . $new_name)){
-            $new_name = $name_part . " (" . $counter . ")." . $extension;
-            $counter++;
-        }
-
-        $target_file = $base_dir . "/" . $new_name;
-        $file_content = file_get_contents($tmp_name);
-
-        if (isset($_POST['encrypt']) && $_POST['encrypt'] === 'true') {
-            $final_content = encrypt_content($file_content, $user_key);
-            file_put_contents($target_file, $final_content);
-        } else {
-            move_uploaded_file($tmp_name, $target_file);
-        }
+        $chunks = decrypt_chunks("$dir/{$row['stored_name']}", $master, $row['stored_name']);
+        $first = $chunks->current();
+    } catch (Throwable $e) {
+        error_log('vault: download failed for file ' . $row['id'] . ': ' . $e->getMessage());
+        http_response_code(500);
+        exit('This file is damaged and cannot be decrypted.');
     }
 
-    if(!empty($_SERVER['HTTP_X_REQUESTED_WITH']) && strtolower($_SERVER['HTTP_X_REQUESTED_WITH']) == 'xmlhttprequest') {
-        echo "ok";
-        exit;
+    $name = decrypt_name($row['name_enc'], $master);
+    $ascii = preg_replace('/[^A-Za-z0-9._ ()-]/', '_', $name);
+    header('Content-Description: File Transfer');
+    header('Content-Type: application/octet-stream');
+    header("Content-Disposition: attachment; filename=\"$ascii\"; filename*=UTF-8''" . rawurlencode($name));
+    header('Content-Length: ' . $row['size']);
+    while (ob_get_level()) ob_end_clean();
+    echo $first;
+    try {
+        for ($chunks->next(); $chunks->valid(); $chunks->next()) {
+            echo $chunks->current();
+            flush();
+        }
+    } catch (Throwable $e) {
+
+        error_log('vault: download aborted for file ' . $row['id'] . ': ' . $e->getMessage());
     }
-    header("Location: dashboard.php");
     exit();
 }
 
-$view_trash = (isset($_GET['view']) && $_GET['view'] === 'trash');
-$current_dir = $view_trash ? $trash_dir : $base_dir;
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (empty($_POST) && empty($_FILES) && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+        upload_response(['Upload is larger than the server allows.']);
+    }
+    if (!csrf_valid()) {
+        http_response_code(403);
+        exit('Your session expired. Reload the page and try again.');
+    }
+
+    $action = $_POST['action'] ?? '';
+
+    if ($action === 'upload') {
+        $files = $_FILES['file_upload'] ?? null;
+        if (!$files || !is_array($files['name'])) upload_response(['No files received.']);
+
+        $errors = [];
+        $taken = active_names($user_id, $master);
+        foreach ($files['name'] as $i => $raw_name) {
+            $name = clean_name((string) $raw_name);
+            $tmp = $files['tmp_name'][$i];
+            if ($files['error'][$i] !== UPLOAD_ERR_OK || !is_uploaded_file($tmp)) {
+                $errors[] = "$name: " . upload_error((int) $files['error'][$i]);
+                continue;
+            }
+            $free = disk_free_space($dir);
+            if ($free === false || $free - 2 * $files['size'][$i] < VAULT_MIN_FREE_BYTES) {
+                $errors[] = "$name: server storage is full";
+                continue;
+            }
+
+            $stored = bin2hex(random_bytes(32));
+            $target = "$dir/$stored";
+            try {
+                encrypt_file($tmp, $target, $master, $stored);
+                $stored_size = filesize($target);
+                $final_name = unique_name($name, $taken);
+
+                db()->exec('BEGIN IMMEDIATE');
+                $used = db()->prepare('SELECT COALESCE(SUM(stored_size), 0) FROM files WHERE user_id = ?');
+                $used->execute([$user_id]);
+                if ((int) $used->fetchColumn() + $stored_size > VAULT_QUOTA_BYTES) {
+                    db()->exec('ROLLBACK');
+                    @unlink($target);
+                    $errors[] = "$name: storage quota exceeded";
+                    continue;
+                }
+                $insert = db()->prepare('INSERT INTO files (user_id, stored_name, name_enc, size, stored_size, created_at) VALUES (?, ?, ?, ?, ?, ?)');
+                $insert->bindValue(1, $user_id, PDO::PARAM_INT);
+                $insert->bindValue(2, $stored);
+                $insert->bindValue(3, encrypt_name($final_name, $master), PDO::PARAM_LOB);
+                $insert->bindValue(4, (int) $files['size'][$i], PDO::PARAM_INT);
+                $insert->bindValue(5, $stored_size, PDO::PARAM_INT);
+                $insert->bindValue(6, time(), PDO::PARAM_INT);
+                $insert->execute();
+                db()->exec('COMMIT');
+                $taken[] = $final_name;
+            } catch (Throwable $e) {
+                if (db()->inTransaction()) db()->exec('ROLLBACK');
+                @unlink($target);
+                error_log('vault: upload failed: ' . $e->getMessage());
+                $errors[] = "$name: could not be saved";
+            }
+        }
+        upload_response($errors);
+    }
+
+    if ($action === 'dismiss_key') {
+        unset($_SESSION['new_key']);
+    } elseif ($action === 'delete' && ($row = find_file($user_id, $_POST['file'] ?? null, 0))) {
+        db()->prepare('UPDATE files SET in_trash = 1 WHERE id = ?')->execute([$row['id']]);
+    } elseif ($action === 'restore' && ($row = find_file($user_id, $_POST['file'] ?? null, 1))) {
+        $name = unique_name(decrypt_name($row['name_enc'], $master), active_names($user_id, $master));
+        $stmt = db()->prepare('UPDATE files SET in_trash = 0, name_enc = :name WHERE id = :id');
+        $stmt->bindValue(':name', encrypt_name($name, $master), PDO::PARAM_LOB);
+        $stmt->bindValue(':id', (int) $row['id'], PDO::PARAM_INT);
+        $stmt->execute();
+    } elseif ($action === 'perm_delete' && ($row = find_file($user_id, $_POST['file'] ?? null, 1))) {
+        db()->prepare('DELETE FROM files WHERE id = ?')->execute([$row['id']]);
+        @unlink("$dir/{$row['stored_name']}");
+    }
+
+    $back = ($action === 'perm_delete' || ($_POST['view'] ?? '') === 'trash') ? '?view=trash' : '';
+    header("Location: dashboard.php$back");
+    exit();
+}
+
+$view_trash = ($_GET['view'] ?? '') === 'trash';
+$rows = file_rows($user_id, $view_trash);
+$csrf = h(csrf_token());
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -123,34 +165,41 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
         .file-info { display: flex; flex-direction: column; }
         .file-meta { font-size: 0.75rem; color: #999; margin-top: 2px; }
         .error { color: red; font-size: 0.8rem; }
-        
+
         .upload-section { margin-bottom: 20px; }
         input[type="file"] { margin-bottom: 10px; width: 100%; }
-        
-        /* Links & Buttons */
+
         .logout { color: #d9534f; text-decoration: none; font-size: 0.8rem; float: right; margin-left: 15px;}
         .trash-link { color: #555; text-decoration: none; font-size: 0.8rem; float: right; }
         .trash-link:hover { text-decoration: underline; }
-        
-        .action-link { margin-left: 10px; text-decoration: none; font-size: 0.85rem; }
+
+        .action-link { margin-left: 10px; text-decoration: none; font-size: 0.85rem; background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; }
+        .actions form, .logout-form { display: inline; }
+        .logout-form button { background: none; border: none; padding: 0; cursor: pointer; font-family: inherit; }
+        .key-banner { background: #fff3cd; color: #664d03; padding: 12px; border-radius: 4px; margin-bottom: 15px; font-size: 0.85rem; }
+        .key-banner code { display: block; margin: 8px 0; font-size: 0.95rem; word-break: break-all; }
+        .upload-error { color: #d9534f; font-size: 0.8rem; margin-top: 10px; white-space: pre-wrap; }
         .dl-btn { color: #007bff; }
-        .del-btn { color: #d9534f; } /* Red for delete */
-        .res-btn { color: #28a745; } /* Green for restore */
-        
+        .del-btn { color: #d9534f; }
+        .res-btn { color: #28a745; }
+
         .btn-upload { background: #28a745; color: white; border: none; padding: 8px 15px; border-radius: 4px; cursor: pointer; }
         .btn-upload:disabled { background: #94d3a2; cursor: not-allowed; }
-        
+
         #progress-container { display: none; margin-top: 15px; background: #f1f1f1; padding: 10px; border-radius: 4px; font-size: 0.85rem; }
         .stat-row { display: flex; justify-content: space-between; margin-bottom: 4px; }
         progress { width: 100%; height: 8px; }
-        
+
         .trash-header { background: #fff3cd; padding: 10px; border-radius: 4px; margin-bottom: 15px; font-size: 0.9rem; color: #856404; display: flex; justify-content: space-between; align-items: center;}
     </style>
 </head>
 <body>
     <div class="card">
         <div style="margin-bottom: 20px; overflow: hidden;">
-            <a href="logout.php" class="logout">Logout</a>
+            <form method="POST" action="logout.php" class="logout-form">
+                <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
+                <button type="submit" class="logout">Logout</button>
+            </form>
             <?php if(!$view_trash): ?>
                 <a href="?view=trash" class="trash-link">🗑️ View Trash</a>
             <?php else: ?>
@@ -158,15 +207,27 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
             <?php endif; ?>
         </div>
 
+        <?php if (!empty($_SESSION['new_key'])): ?>
+            <div class="key-banner">
+                <strong>Save your access key now.</strong> It is shown only until you dismiss this and cannot be recovered.
+                <code><?php echo h($_SESSION['new_key']); ?></code>
+                <form method="POST">
+                    <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
+                    <input type="hidden" name="action" value="dismiss_key">
+                    <input type="hidden" name="view" value="<?php echo $view_trash ? 'trash' : ''; ?>">
+                    <button type="submit" onclick="return confirm('Have you saved your key? It cannot be shown again.')">I saved it</button>
+                </form>
+            </div>
+        <?php endif; ?>
+
         <h3><?php echo $view_trash ? 'Trash Bin' : 'Repository'; ?></h3>
-        
+
         <?php if(!$view_trash): ?>
         <div class="upload-section">
             <form id="uploadForm">
+                <input type="hidden" id="csrfToken" value="<?php echo $csrf; ?>">
                 <input type="file" name="file_upload[]" id="fileInput" multiple required><br>
-                <label style="font-size: 0.9rem;">
-                    <input type="checkbox" id="encryptCheck"> Encrypt with AES-256
-                </label><br><br>
+                <p style="font-size: 0.8rem; color: #666;">Every file is encrypted automatically.</p>
                 <button type="submit" id="uploadBtn" class="btn-upload">Upload Files</button>
             </form>
 
@@ -181,6 +242,7 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
                     <span id="stat-speed">0 Mbps</span>
                 </div>
             </div>
+            <div id="upload-error" class="upload-error"></div>
         </div>
         <?php else: ?>
             <div class="trash-header">
@@ -190,37 +252,41 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
 
         <div class="file-list">
             <strong><?php echo $view_trash ? 'Deleted Items:' : 'Files:'; ?></strong>
-            <?php
-            // Filter out . and .. and .trash folder itself
-            $files = array_diff(scandir($current_dir), array('..', '.', '.trash'));
-            
-            if (empty($files)): ?>
+            <?php if (empty($rows)): ?>
                 <p style="color: #999;">No files found.</p>
-            <?php else: 
-                foreach ($files as $file): 
-                    $filepath = $current_dir.'/'.$file;
-                    $mod_date = date("F j, Y, g:i a", filemtime($filepath));
-                    
-                    $is_encrypted = false;
-                    $first_bytes = file_get_contents($filepath, false, null, 0, 10);
-                    if ($first_bytes === "::SECURE::") $is_encrypted = true;
+            <?php else:
+                foreach ($rows as $row):
+                    $name = decrypt_name($row['name_enc'], $master);
+                    $id = (int) $row['id'];
             ?>
                 <div class="file-item">
                     <div class="file-info">
-                        <span>
-                            <?php echo htmlspecialchars($file); ?>
-                            <?php if($is_encrypted) echo '<span style="color:orange; font-size:0.7em;">(🔒)</span>'; ?>
-                        </span>
-                        <span class="file-meta"><?php echo $mod_date; ?></span>
+                        <span><?php echo h($name); ?></span>
+                        <span class="file-meta"><?php echo h(date('F j, Y, g:i a', (int) $row['created_at'])); ?></span>
                     </div>
-                    
+
                     <div class="actions">
-                        <?php if(!$view_trash): ?>
-                            <a href="?download=<?php echo urlencode($file); ?>" class="action-link dl-btn">Download</a>
-                            <a href="?action=delete&file=<?php echo urlencode($file); ?>" class="action-link del-btn" onclick="return confirm('Move to trash?')">Delete</a>
+                        <?php if (!$view_trash): ?>
+                            <a href="?download=<?php echo $id; ?>" class="action-link dl-btn">Download</a>
+                            <form method="POST" onsubmit="return confirm('Move to trash?')">
+                                <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
+                                <input type="hidden" name="action" value="delete">
+                                <input type="hidden" name="file" value="<?php echo $id; ?>">
+                                <button type="submit" class="action-link del-btn">Delete</button>
+                            </form>
                         <?php else: ?>
-                            <a href="?action=restore&file=<?php echo urlencode($file); ?>" class="action-link res-btn">Restore</a>
-                            <a href="?action=perm_delete&file=<?php echo urlencode($file); ?>" class="action-link del-btn" onclick="return confirm('Permanently delete? This cannot be undone.')">Delete Forever</a>
+                            <form method="POST">
+                                <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
+                                <input type="hidden" name="action" value="restore">
+                                <input type="hidden" name="file" value="<?php echo $id; ?>">
+                                <button type="submit" class="action-link res-btn">Restore</button>
+                            </form>
+                            <form method="POST" onsubmit="return confirm('Permanently delete? This cannot be undone.')">
+                                <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
+                                <input type="hidden" name="action" value="perm_delete">
+                                <input type="hidden" name="file" value="<?php echo $id; ?>">
+                                <button type="submit" class="action-link del-btn">Delete Forever</button>
+                            </form>
                         <?php endif; ?>
                     </div>
                 </div>
@@ -229,11 +295,11 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
     </div>
 
     <script>
-        // Only run upload script if form exists (not in trash view)
+
         const form = document.getElementById('uploadForm');
         if(form){
             const fileInput = document.getElementById('fileInput');
-            const encryptCheck = document.getElementById('encryptCheck');
+            const uploadError = document.getElementById('upload-error');
             const uploadBtn = document.getElementById('uploadBtn');
             const progressContainer = document.getElementById('progress-container');
             const progressBar = document.getElementById('progressBar');
@@ -257,7 +323,9 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
                 for (let i = 0; i < fileInput.files.length; i++) {
                     formData.append('file_upload[]', fileInput.files[i]);
                 }
-                if(encryptCheck.checked) formData.append('encrypt', 'true');
+                formData.append('csrf', document.getElementById('csrfToken').value);
+                formData.append('action', 'upload');
+                uploadError.textContent = '';
 
                 const xhr = new XMLHttpRequest();
                 const startTime = new Date().getTime();
@@ -270,7 +338,7 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
                         const percentComplete = (e.loaded / e.total) * 100;
                         const duration = (new Date().getTime() - startTime) / 1000;
                         const mbps = ((e.loaded / duration) * 8) / (1000 * 1000);
-                        
+
                         progressContainer.style.display = 'block';
                         progressBar.value = percentComplete;
                         statPercent.innerText = Math.round(percentComplete) + '%';
@@ -283,9 +351,13 @@ $current_dir = $view_trash ? $trash_dir : $base_dir;
                     if (xhr.status === 200) {
                         window.location.reload();
                     } else {
-                        alert('Upload failed');
+                        uploadError.textContent = xhr.responseText || 'Upload failed.';
                         uploadBtn.disabled = false;
                     }
+                };
+                xhr.onerror = function() {
+                    uploadError.textContent = 'Network error. Upload failed.';
+                    uploadBtn.disabled = false;
                 };
                 uploadBtn.disabled = true;
                 xhr.send(formData);

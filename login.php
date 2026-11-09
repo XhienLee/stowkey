@@ -1,57 +1,42 @@
 <?php
-session_start();
-if (@$_SESSION['user_login']) {
-    header("Location: dashboard.php");
+require __DIR__ . '/lib.php';
+start_session();
+
+if (!empty($_SESSION['uid'])) {
+    header('Location: dashboard.php');
     exit();
 }
 
-$error_msg = "";
-$success_msg = "";
-
-function loadKeys($jsonFile) {
-    if (!file_exists($jsonFile)) return [];
-    $data = json_decode(file_get_contents($jsonFile), true);
-    return is_array($data) ? $data : [];
-}
-
-function saveKeys($jsonFile, $keys) {
-    file_put_contents($jsonFile, json_encode(array_values($keys), JSON_PRETTY_PRINT));
-}
-
-$jsonFile = 'keys.json';
+$error_msg = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $action  = $_POST['action'] ?? '';
-    $userKey = trim($_POST['key'] ?? '');
-    $validUUID4 = preg_match('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i', $userKey);
+    $action = $_POST['action'] ?? '';
 
-    if (!$validUUID4) {
-        $error_msg = "Invalid UUID4 format.";
-    } else {
-        $keys = loadKeys($jsonFile);
+    if (!csrf_valid()) {
+        $error_msg = 'Your session expired. Please try again.';
+    } elseif ($action === 'register') {
 
-        if ($action === 'register') {
-            // Key must NOT already exist
-            if (in_array($userKey, $keys)) {
-                $error_msg = "That key is already registered. Use Login instead.";
-            } else {
-                $keys[] = $userKey;
-                saveKeys($jsonFile, $keys);
-                $_SESSION['user_login'] = true;
-                $_SESSION['key'] = $userKey;
-                header("Location: dashboard.php");
+        $accessKey = generate_uuid4();
+        $stmt = db()->prepare('INSERT INTO users (key_hash, created_at) VALUES (?, ?)');
+        $stmt->execute([key_lookup($accessKey), time()]);
+        log_in((int) db()->lastInsertId(), $accessKey);
+        $_SESSION['new_key'] = $accessKey;
+        header('Location: dashboard.php');
+        exit();
+    } elseif ($action === 'login') {
+        $userKey = trim(is_string($_POST['key'] ?? null) ? $_POST['key'] : '');
+        if (!preg_match(VAULT_UUID4, $userKey)) {
+            $error_msg = 'Invalid UUID4 format.';
+        } else {
+            $stmt = db()->prepare('SELECT id FROM users WHERE key_hash = ?');
+            $stmt->execute([key_lookup($userKey)]);
+            $user = $stmt->fetch();
+            if ($user) {
+                log_in((int) $user['id'], $userKey);
+                header('Location: dashboard.php');
                 exit();
             }
-        } elseif ($action === 'login') {
-            // Key MUST already exist
-            if (in_array($userKey, $keys)) {
-                $_SESSION['user_login'] = true;
-                $_SESSION['key'] = $userKey;
-                header("Location: dashboard.php");
-                exit();
-            } else {
-                $error_msg = "Key not found. Generate a new key and register it first.";
-            }
+            $error_msg = 'Key not found.';
         }
     }
 }
@@ -92,7 +77,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             overflow: hidden;
         }
 
-        /* Animated grid background */
         body::before {
             content: '';
             position: fixed;
@@ -144,7 +128,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             position: relative;
         }
 
-        /* Corner accent */
         .card::before {
             content: '';
             position: absolute;
@@ -162,7 +145,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-right: 2px solid var(--accent);
         }
 
-        /* Tabs */
         .tabs {
             display: flex;
             border-bottom: 1px solid var(--border);
@@ -191,7 +173,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-bottom-color: var(--accent);
         }
 
-        /* Key generator */
         .keygen-box {
             background: #0d0d0d;
             border: 1px solid var(--border);
@@ -257,7 +238,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         .gen-btn:hover { border-color: var(--accent); color: var(--accent); }
 
-        /* Input */
         .field { margin-bottom: 1rem; }
 
         .field label {
@@ -285,7 +265,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .field input:focus { border-color: var(--accent); }
         .field input::placeholder { color: var(--muted); }
 
-        /* Submit */
         .submit-btn {
             width: 100%;
             background: var(--accent);
@@ -305,7 +284,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .submit-btn:hover { background: #d4f570; }
         .submit-btn:active { transform: scale(0.99); }
 
-        /* Messages */
         .message {
             font-size: 0.75rem;
             padding: 0.6rem 0.8rem;
@@ -326,11 +304,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             border-top: 1px solid var(--border);
         }
 
-        /* Panel switching */
         .panel { display: none; }
         .panel.active { display: block; }
 
-        /* Fade in */
         @keyframes fadeUp {
             from { opacity: 0; transform: translateY(12px); }
             to { opacity: 1; transform: translateY(0); }
@@ -355,9 +331,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <button class="tab-btn" onclick="switchTab('register', this)">Register</button>
         </div>
 
-        <!-- LOGIN PANEL -->
         <div class="panel active" id="panel-login">
             <form method="POST" action="">
+                <input type="hidden" name="csrf" value="<?php echo h(csrf_token()); ?>">
                 <input type="hidden" name="action" value="login">
                 <div class="field">
                     <label>Access Key</label>
@@ -365,26 +341,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 </div>
                 <button type="submit" class="submit-btn">Authenticate →</button>
             </form>
-            <p class="hint">Don't have a key yet? Switch to <strong>Register</strong> to generate and lock in your key.</p>
+            <p class="hint">Don't have a key yet? Switch to <strong>Register</strong> to create one.</p>
         </div>
 
-        <!-- REGISTER PANEL -->
         <div class="panel" id="panel-register">
-            <div class="keygen-box" id="keygenBox" onclick="copyKey()">
-                <span class="key-text empty" id="keyDisplay">Click "Generate" to create your key</span>
-                <button class="copy-btn" id="copyBtn" onclick="event.stopPropagation(); copyKey()">COPY</button>
-            </div>
-            <button class="gen-btn" type="button" onclick="generateKey()">⟳ Generate New Key</button>
-
-            <form method="POST" action="" id="registerForm">
+            <form method="POST" action="">
+                <input type="hidden" name="csrf" value="<?php echo h(csrf_token()); ?>">
                 <input type="hidden" name="action" value="register">
-                <div class="field">
-                    <label>Paste Your Key to Register</label>
-                    <input type="text" name="key" id="registerKeyInput" placeholder="Paste generated key here" required>
-                </div>
-                <button type="submit" class="submit-btn">Register &amp; Enter →</button>
+                <button type="submit" class="submit-btn">Create My Key →</button>
             </form>
-            <p class="hint">⚠ Save your key somewhere safe — it cannot be recovered. Once registered, only this key unlocks your vault.</p>
+            <p class="hint">⚠ Your key is shown once after registering and cannot be recovered. It is the only way to open your vault.</p>
         </div>
     </div>
 </div>
@@ -395,41 +361,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
         btn.classList.add('active');
         document.getElementById('panel-' + tab).classList.add('active');
-    }
-
-    let generatedKey = '';
-
-    function generateKey() {
-        const display = document.getElementById('keyDisplay');
-        display.classList.add('empty');
-        display.textContent = 'Generating...';
-
-        fetch('generate.php')
-            .then(r => r.json())
-            .then(data => {
-                if (data.key) {
-                    generatedKey = data.key;
-                    display.classList.remove('empty');
-                    display.textContent = generatedKey;
-                    document.getElementById('registerKeyInput').value = generatedKey;
-                    document.getElementById('copyBtn').textContent = 'COPY';
-                    document.getElementById('copyBtn').classList.remove('copied');
-                }
-            })
-            .catch(() => { display.textContent = 'Error — try again.'; });
-    }
-
-    function copyKey() {
-        if (!generatedKey) return;
-        navigator.clipboard.writeText(generatedKey).then(() => {
-            const btn = document.getElementById('copyBtn');
-            btn.textContent = 'COPIED!';
-            btn.classList.add('copied');
-            setTimeout(() => {
-                btn.textContent = 'COPY';
-                btn.classList.remove('copied');
-            }, 2000);
-        });
     }
 </script>
 </body>
