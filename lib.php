@@ -403,3 +403,19 @@ function file_badge(string $name): string {
     $extension = strtoupper(pathinfo($name, PATHINFO_EXTENSION));
     return ($extension === '' || strlen($extension) > 4 || !ctype_alnum($extension)) ? 'FILE' : $extension;
 }
+
+function ini_bytes(string $name): int {
+    $value = trim((string) ini_get($name));
+    $number = (int) $value;
+    return match (strtoupper(substr($value, -1))) {
+        'G' => $number * 1073741824,
+        'M' => $number * 1048576,
+        'K' => $number * 1024,
+        default => $number,
+    };
+}
+
+function stored_size_for(int $bytes): int {
+    return SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES
+        + SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES * max(1, (int) ceil($bytes / VAULT_CHUNK_BYTES));
+}

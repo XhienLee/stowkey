@@ -144,8 +144,57 @@
             input.value = '';
         }
 
+        function formatSize(bytes) {
+            if (bytes < 1024) return bytes + ' B';
+            if (bytes < 1048576) return Math.round(bytes / 1024) + ' KB';
+            if (bytes < 1073741824) return (bytes / 1048576).toFixed(1) + ' MB';
+            return (bytes / 1073741824).toFixed(1).replace(/\.0$/, '') + ' GB';
+        }
+
+        function limit(name) {
+            const value = Number(zone.dataset[name]);
+            return value > 0 ? value : Infinity;
+        }
+
+        function storedSize(bytes) {
+            const chunks = Math.max(1, Math.ceil(bytes / limit('chunk')));
+            return bytes + (Number(zone.dataset.header) || 0) + (Number(zone.dataset.tag) || 0) * chunks;
+        }
+
+        function review(files) {
+            const list = Array.from(files);
+            const maxFile = limit('maxFile');
+            const tooBig = list.filter(function (file) { return file.size > maxFile; });
+            if (tooBig.length > 0) {
+                return tooBig.map(function (file) {
+                    return file.name + ' is ' + formatSize(file.size) + '. The largest file this server accepts is ' + formatSize(maxFile) + '.';
+                }).join('\n');
+            }
+            if (list.length > limit('maxCount')) {
+                return 'You can upload up to ' + limit('maxCount') + ' files at a time.';
+            }
+            const free = zone.dataset.free === undefined ? Infinity : Number(zone.dataset.free);
+            const needed = list.reduce(function (sum, file) { return sum + storedSize(file.size); }, 0);
+            if (needed > free) {
+                const what = list.length === 1 ? list[0].name + ' is ' + formatSize(list[0].size) : 'These files need ' + formatSize(needed);
+                const trash = Number(zone.dataset.trash) > 0 ? ' Files in Trash count toward your storage.' : '';
+                return what + ', but you have ' + formatSize(free) + ' free.' + trash;
+            }
+            const total = list.reduce(function (sum, file) { return sum + file.size; }, 0);
+            if (total > limit('maxRequest')) {
+                return 'Those files total ' + formatSize(total) + '. Upload at most ' + formatSize(limit('maxRequest')) + ' at a time.';
+            }
+            return '';
+        }
+
         function upload(files) {
             if (busy || files.length === 0) return;
+            const problem = review(files);
+            if (problem) {
+                error.textContent = problem;
+                input.value = '';
+                return;
+            }
             busy = true;
             pick.disabled = true;
             error.textContent = '';

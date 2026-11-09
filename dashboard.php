@@ -84,6 +84,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $errors[] = ['file' => $name, 'code' => 'upload_failed', 'message' => "$name: " . upload_error((int) $files['error'][$i])];
                 continue;
             }
+            $current = db()->prepare('SELECT COALESCE(SUM(stored_size), 0) FROM files WHERE user_id = ?');
+            $current->execute([$user_id]);
+            if ((int) $current->fetchColumn() + (int) $files['size'][$i] + stored_size_for((int) $files['size'][$i]) > vault_quota()) {
+                $errors[] = ['file' => $name, 'code' => 'quota_exceeded', 'message' => "$name: storage quota exceeded"];
+                continue;
+            }
             $free = disk_free_space($dir);
             if ($free === false || $free - 2 * $files['size'][$i] < VAULT_MIN_FREE_BYTES) {
                 $errors[] = ['file' => $name, 'code' => 'disk_full', 'message' => "$name: server storage is full"];
@@ -190,7 +196,7 @@ page_head(($view_trash ? 'Trash' : 'My files') . ' - Stowkey');
     </nav>
 
     <?php if (!$view_trash): ?>
-    <section class="drop" id="dropZone">
+    <section class="drop" id="dropZone" data-free="<?php echo max(0, vault_quota() - $used); ?>" data-max-file="<?php echo ini_bytes('upload_max_filesize'); ?>" data-max-request="<?php echo ini_bytes('post_max_size'); ?>" data-max-count="<?php echo (int) ini_get('max_file_uploads'); ?>" data-header="<?php echo SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_HEADERBYTES; ?>" data-tag="<?php echo SODIUM_CRYPTO_SECRETSTREAM_XCHACHA20POLY1305_ABYTES; ?>" data-chunk="<?php echo VAULT_CHUNK_BYTES; ?>" data-trash="<?php echo $trash_count; ?>">
         <p class="drop-title">Add your files</p>
         <input type="hidden" id="csrfToken" value="<?php echo $csrf; ?>">
         <label class="sr-only" for="fileInput">Choose files to upload</label>

@@ -89,6 +89,8 @@ These limits are constants at the top of `lib.php`:
 
 `VAULT_QUOTA_BYTES`, `VAULT_IDLE_SECONDS` and the two registration limits can also be set with environment variables of the same name.
 
+The browser checks file sizes before uploading, but that is only for convenience. The server still enforces the quota. To reject oversized uploads as early as possible, also set `LimitRequestBody` on Apache or `client_max_body_size` on nginx.
+
 For a public demo, lower the storage limits, for example `VAULT_QUOTA_BYTES=104857600` (100 MiB) and `VAULT_REG_GLOBAL_HOUR=20`.
 
 Behind a reverse proxy or CDN, configure your web server to restore the real client address (`mod_remoteip` or nginx `real_ip`). Otherwise every visitor shares the proxy address and one limit.
