@@ -74,6 +74,25 @@ Set `upload_max_filesize` and `post_max_size` in the PHP-FPM `php.ini`, then res
 
 If `VAULT_DATA_DIR` is not set, the app uses a `vault_data` folder next to the code folder.
 
+## Test locally with `php -S`
+
+For trying the app on your own computer only. PHP's built-in server is not safe for real hosting. Run these from the project folder.
+
+Linux or macOS:
+
+```bash
+VAULT_DATA_DIR=/tmp/stowkey-data PHP_CLI_SERVER_WORKERS=4 php -d upload_max_filesize=100M -d post_max_size=110M -S 127.0.0.1:8000
+```
+
+Windows PowerShell:
+
+```powershell
+$env:VAULT_DATA_DIR = "$env:TEMP\stowkey-data"
+php -d upload_max_filesize=100M -d post_max_size=110M -S 127.0.0.1:8000
+```
+
+Then open <http://127.0.0.1:8000>. `VAULT_DATA_DIR` must be outside the project folder, and any setting from the Configuration section can be added the same way. For example, use `VAULT_REG_PER_IP_HOUR=1000` to avoid hitting the new-key limit while testing.
+
 ## Configuration
 
 These limits are constants at the top of `lib.php`:
