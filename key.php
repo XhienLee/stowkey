@@ -22,7 +22,7 @@ page_head('Save your key - Stowkey');
 ?>
 <body>
 <div class="center-page">
-    <span class="brand">Stowkey</span>
+    <span class="brand"><?php echo brand_mark(); ?>Stowkey</span>
     <main class="panel panel-wide">
         <p class="eyebrow">Your vault is ready</p>
         <h1>Save your key before you continue</h1>

@@ -3,6 +3,48 @@
     if (!input) return;
     const pattern = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
     const hint = document.getElementById('keyHint');
+    const paste = document.getElementById('pasteKey');
+    const fileButton = document.getElementById('keyFileBtn');
+    const fileInput = document.getElementById('keyFile');
+
+    function useKey(text) {
+        const found = text.match(/[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/i);
+        if (!found) {
+            hint.className = 'hint bad';
+            hint.textContent = "We couldn't find a key in that.";
+            return;
+        }
+        input.value = found[0];
+        input.dispatchEvent(new Event('input'));
+    }
+
+    if (navigator.clipboard && navigator.clipboard.readText) {
+        paste.addEventListener('click', async function () {
+            try {
+                useKey(await navigator.clipboard.readText());
+            } catch (e) {
+                input.focus();
+                hint.className = 'hint';
+                hint.textContent = 'Paste your key into the box.';
+            }
+        });
+    } else {
+        paste.hidden = true;
+        fileButton.style.gridColumn = '1 / -1';
+    }
+
+    fileButton.addEventListener('click', function () { fileInput.click(); });
+    fileInput.addEventListener('change', function () {
+        const file = fileInput.files[0];
+        if (!file) return;
+        if (file.size > 4096) {
+            useKey('');
+        } else {
+            file.text().then(useKey);
+        }
+        fileInput.value = '';
+    });
+
     input.addEventListener('input', function () {
         const value = input.value.trim();
         const valid = pattern.test(value);
@@ -52,6 +94,20 @@
 })();
 
 (function () {
+    const menus = document.querySelectorAll('.more');
+    menus.forEach(function (menu) {
+        menu.addEventListener('toggle', function () {
+            if (!menu.open) return;
+            menus.forEach(function (other) { if (other !== menu) other.open = false; });
+        });
+    });
+    document.addEventListener('click', function (event) {
+        menus.forEach(function (menu) { if (!menu.contains(event.target)) menu.open = false; });
+    });
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') menus.forEach(function (menu) { menu.open = false; });
+    });
+
     const toast = document.querySelector('.toast');
     if (toast) setTimeout(function () { toast.remove(); }, toast.querySelector('form') ? 10000 : 5000);
 
@@ -97,7 +153,7 @@
             for (const file of files) data.append('file_upload[]', file);
             data.append('csrf', document.getElementById('csrfToken').value);
             data.append('action', 'upload');
-            label.textContent = files.length === 1 ? 'Encrypting and uploading ' + files[0].name : 'Encrypting and uploading ' + files.length + ' files';
+            label.textContent = files.length === 1 ? 'Uploading ' + files[0].name : 'Uploading ' + files.length + ' files';
             bar.value = 0;
             pct.textContent = '0%';
             progress.hidden = false;

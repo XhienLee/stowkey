@@ -24,7 +24,7 @@ These examples use `/var/www/vault` for the code and `/var/lib/vault` for data. 
 
 ```bash
 sudo mkdir -p /var/www/vault /var/lib/vault
-sudo cp *.php app.css app.js /var/www/vault/
+sudo cp -r *.php app.css app.js favicon.svg fonts /var/www/vault/
 sudo chown www-data /var/lib/vault
 sudo chmod 700 /var/lib/vault
 ```
@@ -81,12 +81,15 @@ These limits are constants at the top of `lib.php`:
 | Constant | Default | Purpose |
 |---|---|---|
 | `VAULT_QUOTA_BYTES` | 1 GiB | Storage per user, including trash |
+| `VAULT_IDLE_SECONDS` | 1800 | Log users out after this much inactivity |
 | `VAULT_MIN_FREE_BYTES` | 1 GiB | Uploads stop when free disk falls below this |
 | `VAULT_REG_PER_IP_HOUR` | 5 | New keys per IP address (or IPv6 /64) each hour |
 | `VAULT_REG_GLOBAL_HOUR` | 100 | New keys across the whole site each hour |
 | `VAULT_CHUNK_BYTES` | 1 MiB | Encryption chunk size. Do not change once files exist |
 
-The two registration limits can also be set with environment variables of the same name.
+`VAULT_QUOTA_BYTES`, `VAULT_IDLE_SECONDS` and the two registration limits can also be set with environment variables of the same name.
+
+For a public demo, lower the storage limits, for example `VAULT_QUOTA_BYTES=104857600` (100 MiB) and `VAULT_REG_GLOBAL_HOUR=20`.
 
 Behind a reverse proxy or CDN, configure your web server to restore the real client address (`mod_remoteip` or nginx `real_ip`). Otherwise every visitor shares the proxy address and one limit.
 
@@ -109,7 +112,8 @@ Back up `vault.db` and the `files/` folder together, from the data folder. Stop 
 
 Known limits:
 
-- While a user is logged in, their derived key is in the PHP session file. A newly created access key also stays there until the user confirms they saved it, or the session ends. Someone who controls the running server can read files of active users or capture keys at login.
+- While a user is logged in, their derived key is in a session file in the private data folder. A newly created access key also stays there until the user confirms they saved it or the session times out. Someone who controls the running server can read files of active users or capture keys at login.
 - File sizes, upload times and the number of files per user are not encrypted.
+- Disk can still be filled by many accounts. When free space runs out, uploads stop for everyone.
 - Registration limits slow abuse but cannot stop an attacker with many IP addresses. The site-wide limit caps growth, but such an attacker could use it up and block new keys for an hour.
 - The HKDF labels in `lib.php` must not change once data exists, or existing files become unreadable.

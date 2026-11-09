@@ -4,6 +4,7 @@ declare(strict_types=1);
 const VAULT_CHUNK_BYTES = 1048576;
 const VAULT_QUOTA_BYTES = 1073741824;
 const VAULT_MIN_FREE_BYTES = 1073741824;
+const VAULT_IDLE_SECONDS = 1800;
 const VAULT_REG_PER_IP_HOUR = 5;
 const VAULT_REG_GLOBAL_HOUR = 100;
 const VAULT_UUID4 = '/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i';
@@ -76,16 +77,31 @@ function start_session(): void {
     data_dir();
     ini_set('session.use_strict_mode', '1');
     ini_set('session.use_only_cookies', '1');
+    $idle = limit_setting('VAULT_IDLE_SECONDS', VAULT_IDLE_SECONDS);
+    $sessions = data_dir() . '/sessions';
+    if (!is_dir($sessions) && !@mkdir($sessions, 0700, true) && !is_dir($sessions)) {
+        vault_fail("cannot create $sessions");
+    }
+    session_save_path($sessions);
+    ini_set('session.gc_maxlifetime', (string) $idle);
+    ini_set('session.gc_probability', '1');
+    ini_set('session.gc_divisor', '50');
     $https = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off')
         || ($_SERVER['HTTP_X_FORWARDED_PROTO'] ?? '') === 'https';
     session_set_cookie_params([
         'lifetime' => 0, 'path' => '/', 'secure' => $https, 'httponly' => true, 'samesite' => 'Lax',
     ]);
     session_start();
+    $now = time();
+    if (!empty($_SESSION['uid']) && $now - (int) ($_SESSION['last_seen'] ?? $now) > $idle) {
+        $_SESSION = ['timed_out' => true];
+        session_regenerate_id(true);
+    }
+    $_SESSION['last_seen'] = $now;
     header('X-Content-Type-Options: nosniff');
     header('X-Frame-Options: DENY');
     header('Referrer-Policy: no-referrer');
-    header("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
+    header("Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'");
 }
 
 function csrf_token(): string {
@@ -276,9 +292,7 @@ function page_head(string $title): void {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?php echo h($title); ?></title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
+    <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="app.css">
     <script src="app.js" defer></script>
 </head>
@@ -375,4 +389,17 @@ function enter_page(string $page): string {
     }
     header("Location: $next");
     exit();
+}
+
+function vault_quota(): int {
+    return limit_setting('VAULT_QUOTA_BYTES', VAULT_QUOTA_BYTES);
+}
+
+function brand_mark(): string {
+    return '<svg class="brand-mark" width="26" height="26" viewBox="0 0 28 28" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M9 3h15a2 2 0 0 1 2 2v18a2 2 0 0 1-2 2H9l-7-7V10z M10 14a3 3 0 1 0 6 0a3 3 0 1 0-6 0z"/></svg>';
+}
+
+function file_badge(string $name): string {
+    $extension = strtoupper(pathinfo($name, PATHINFO_EXTENSION));
+    return ($extension === '' || strlen($extension) > 4 || !ctype_alnum($extension)) ? 'FILE' : $extension;
 }

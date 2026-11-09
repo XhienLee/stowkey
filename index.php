@@ -7,7 +7,7 @@ page_head('Stowkey: private file storage with one key');
 <body>
 <header class="hero on-dark">
     <div class="wrap topbar">
-        <a href="index.php" class="brand">Stowkey</a>
+        <a href="index.php" class="brand"><?php echo brand_mark(); ?>Stowkey</a>
         <a href="<?php echo SESSION_STATES[$state]['home']; ?>" class="topbar-link">Open my vault</a>
     </div>
     <div class="hero-body">
@@ -22,7 +22,7 @@ page_head('Stowkey: private file storage with one key');
         </div>
         <div class="hero-actions">
             <a href="login.php?mode=new" class="btn btn-light">Get your key</a>
-            <a href="login.php" class="btn btn-ghost">I already have a key</a>
+            <a href="login.php" class="hero-link">I already have a key</a>
         </div>
     </div>
 </header>
@@ -40,7 +40,7 @@ page_head('Stowkey: private file storage with one key');
             <h2>What you get</h2>
             <ul class="ticks">
                 <li>Every file and filename encrypted automatically</li>
-                <li><?php echo h(format_bytes(VAULT_QUOTA_BYTES)); ?> of storage for each key</li>
+                <li><?php echo h(format_bytes(vault_quota())); ?> of storage for each key</li>
                 <li>Deleted files wait in Trash until you decide</li>
                 <li>Works in any browser, on phone or computer</li>
             </ul>

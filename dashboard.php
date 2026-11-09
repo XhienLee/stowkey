@@ -35,6 +35,7 @@ if (isset($_GET['download'])) {
         exit('This file is damaged and cannot be decrypted.');
     }
 
+    session_write_close();
     $name = decrypt_name($row['name_enc'], $master);
     $ascii = preg_replace('/[^A-Za-z0-9._ ()-]/', '_', $name);
     header('Content-Description: File Transfer');
@@ -99,7 +100,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 db()->exec('BEGIN IMMEDIATE');
                 $used = db()->prepare('SELECT COALESCE(SUM(stored_size), 0) FROM files WHERE user_id = ?');
                 $used->execute([$user_id]);
-                if ((int) $used->fetchColumn() + $stored_size > VAULT_QUOTA_BYTES) {
+                if ((int) $used->fetchColumn() + $stored_size > vault_quota()) {
                     db()->exec('ROLLBACK');
                     @unlink($target);
                     $errors[] = ['file' => $name, 'code' => 'quota_exceeded', 'message' => "$name: storage quota exceeded"];
@@ -162,17 +163,17 @@ $trash_count = count($view_trash ? $rows : file_rows($user_id, true));
 $usage = db()->prepare('SELECT COALESCE(SUM(stored_size), 0) FROM files WHERE user_id = ?');
 $usage->execute([$user_id]);
 $used = (int) $usage->fetchColumn();
-$used_pct = min(100, round($used / VAULT_QUOTA_BYTES * 100, 1));
+$used_pct = min(100, round($used / vault_quota() * 100, 1));
 $flash = take_flash();
 page_head(($view_trash ? 'Trash' : 'My files') . ' - Stowkey');
 ?>
 <body data-state="ready" data-view="<?php echo $view_trash ? 'trash' : 'files'; ?>">
 <header class="appbar">
     <div class="wrap">
-        <a href="index.php" class="brand">Stowkey</a>
+        <a href="index.php" class="brand"><?php echo brand_mark(); ?>Stowkey</a>
         <div class="appbar-right">
             <div class="meter">
-                <?php echo h(format_bytes($used)); ?> of <?php echo h(format_bytes(VAULT_QUOTA_BYTES)); ?> used
+                <?php echo h(format_bytes($used)); ?> of <?php echo h(format_bytes(vault_quota())); ?> used
                 <div class="meter-track"><span style="width: <?php echo $used_pct; ?>%"></span></div>
             </div>
             <form method="POST" action="logout.php">
@@ -212,20 +213,33 @@ page_head(($view_trash ? 'Trash' : 'My files') . ' - Stowkey');
             $id = (int) $row['id'];
         ?>
             <div class="file-item">
-                <div class="file-info">
-                    <span class="file-name"><?php echo h($name); ?></span>
-                    <span class="file-meta"><?php echo h(format_bytes((int) $row['size'])); ?> · <?php echo $view_trash ? 'Still counts toward your storage' : h(date('M j, Y', (int) $row['created_at'])); ?></span>
-                </div>
-                <div class="actions">
-                    <?php if (!$view_trash): ?>
-                        <a href="?download=<?php echo $id; ?>" class="btn btn-line btn-small dl-btn">Download</a>
-                        <form method="POST">
-                            <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
-                            <input type="hidden" name="action" value="delete">
-                            <input type="hidden" name="file" value="<?php echo $id; ?>">
-                            <button type="submit" class="btn btn-small btn-danger">Delete</button>
-                        </form>
-                    <?php else: ?>
+                <?php if (!$view_trash): ?>
+                    <a href="?download=<?php echo $id; ?>" class="file-open" aria-label="Download <?php echo h($name); ?>">
+                        <span class="file-badge" aria-hidden="true"><?php echo h(file_badge($name)); ?></span>
+                        <span class="file-info">
+                            <span class="file-name"><?php echo h($name); ?></span>
+                            <span class="file-meta"><?php echo h(format_bytes((int) $row['size'])); ?> · <?php echo h(date('M j, Y', (int) $row['created_at'])); ?></span>
+                        </span>
+                    </a>
+                    <details class="more">
+                        <summary aria-label="More actions for <?php echo h($name); ?>"><svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true"><circle cx="4" cy="10" r="1.8" fill="currentColor"/><circle cx="10" cy="10" r="1.8" fill="currentColor"/><circle cx="16" cy="10" r="1.8" fill="currentColor"/></svg></summary>
+                        <div class="more-menu">
+                            <a href="?download=<?php echo $id; ?>" class="more-item">Download</a>
+                            <form method="POST">
+                                <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
+                                <input type="hidden" name="action" value="delete">
+                                <input type="hidden" name="file" value="<?php echo $id; ?>">
+                                <button type="submit" class="more-item btn-danger">Delete</button>
+                            </form>
+                        </div>
+                    </details>
+                <?php else: ?>
+                    <span class="file-badge" aria-hidden="true"><?php echo h(file_badge($name)); ?></span>
+                    <div class="file-info">
+                        <span class="file-name"><?php echo h($name); ?></span>
+                        <span class="file-meta"><?php echo h(format_bytes((int) $row['size'])); ?> · Still counts toward your storage</span>
+                    </div>
+                    <div class="actions">
                         <form method="POST">
                             <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
                             <input type="hidden" name="action" value="restore">
@@ -238,8 +252,8 @@ page_head(($view_trash ? 'Trash' : 'My files') . ' - Stowkey');
                             <input type="hidden" name="file" value="<?php echo $id; ?>">
                             <button type="submit" class="btn btn-small btn-danger">Delete forever</button>
                         </form>
-                    <?php endif; ?>
-                </div>
+                    </div>
+                <?php endif; ?>
             </div>
         <?php endforeach; endif; ?>
     </section>

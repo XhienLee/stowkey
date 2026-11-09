@@ -4,7 +4,8 @@ start_session();
 
 enter_page('login');
 
-$error_msg = '';
+$error_msg = empty($_SESSION['timed_out']) ? '' : 'You were logged out after being inactive. Enter your key to continue.';
+unset($_SESSION['timed_out']);
 $is_new = ($_GET['mode'] ?? '') === 'new';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -48,7 +49,7 @@ page_head($is_new ? 'Get your key - Stowkey' : 'Open your vault - Stowkey');
 ?>
 <body>
 <div class="center-page">
-    <a href="index.php" class="brand">Stowkey</a>
+    <a href="index.php" class="brand"><?php echo brand_mark(); ?>Stowkey</a>
     <main class="panel">
         <nav class="tabs" aria-label="Choose an option">
             <a href="login.php"<?php if (!$is_new) echo ' aria-current="page"'; ?>>I have a key</a>
@@ -60,7 +61,7 @@ page_head($is_new ? 'Get your key - Stowkey' : 'Open your vault - Stowkey');
             <?php if ($error_msg): ?><p class="alert" role="alert"><?php echo h($error_msg); ?></p><?php endif; ?>
             <ul class="ticks">
                 <li>Your vault is ready right away</li>
-                <li><?php echo h(format_bytes(VAULT_QUOTA_BYTES)); ?> of encrypted storage</li>
+                <li><?php echo h(format_bytes(vault_quota())); ?> of encrypted storage</li>
                 <li>You'll save the key on the next screen</li>
             </ul>
             <form method="POST" action="login.php?mode=new">
@@ -76,6 +77,11 @@ page_head($is_new ? 'Get your key - Stowkey' : 'Open your vault - Stowkey');
                 <input type="hidden" name="csrf" value="<?php echo $csrf; ?>">
                 <input type="hidden" name="action" value="login">
                 <label class="field-label" for="key">Your key</label>
+                <div class="key-tools">
+                    <button type="button" class="btn btn-line btn-small" id="pasteKey">Paste</button>
+                    <button type="button" class="btn btn-line btn-small" id="keyFileBtn">Use key file</button>
+                    <input class="sr-only" type="file" id="keyFile" accept=".txt,text/plain" tabindex="-1" aria-label="Choose your saved key file">
+                </div>
                 <input class="field" id="key" type="text" name="key" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste your key here" required>
                 <p class="hint" id="keyHint" aria-live="polite"></p>
                 <button type="submit" class="btn btn-primary">Open my vault</button>
